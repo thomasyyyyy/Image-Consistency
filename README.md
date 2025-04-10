@@ -2,7 +2,7 @@
 This repository contains a multi-step data science workflow for analyzing large-scale social media data. It spans data cleaning, statistical modeling, factor analysis, regression, and meta-analysis, with a final focus on comparing advanced count-based models such as zero-inflated negative binomial models.
 
 ### 📁 Repository Structure
-1_data_cleaning.ipynb
+# 1 ImageAnalysis.ipynb
 A Jupyter Notebook that handles data preprocessing and cleaning.
 
 Analyses the images using a modified version of pyaesthetics
@@ -13,7 +13,7 @@ Normalizes and formats textual and numerical fields
 
 Prepares the dataset for downstream statistical modeling in R
 
-2_analysis_factor_regression_meta.Rmd
+# 2 ConsistencyAnalysis_TY_Images.Rmd
 An R Markdown document that performs:
 
 Descriptive statistics and exploratory data analysis
@@ -24,7 +24,7 @@ Linear and generalized regression models to evaluate relationships
 
 Meta-analysis combining insights across platforms or studies
 
-3_model_comparison.Rmd
+3 Model Evaluations.Rmd
 A second R Markdown file comparing several models suitable for social media engagement data, particularly skewed and zero-heavy outcomes.
 Models evaluated include:
 
