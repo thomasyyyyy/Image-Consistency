@@ -1,0 +1,1009 @@
+---
+title: "Textual Analysis Model"
+author: "Thomas"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+#Overview
+
+This R Markdown file represents the second phase of a larger brand consistency project analyzing over (number of posts) posts of (number of companies) across Facebook, Twitter, and Instagram. This first phase analyzes text only. The project aims to determine the key components of brand messaging which need to remain consistent to maximize social media engagement. 
+
+Brand posts on social media have several components. The image/video (post) is the main content of the post, hooking the viewer into engaging with the brand through visual stimuli. The text (caption) provides extra details for the viewer to enhance/clarify their understanding of the main post (provide contextual information), add new details not included in the main post (a hyperlink, event details, tags, etc.), and/or bid for engagement (instructions for comments, tagging others, like this post).
+
+Marketers have conventionally used a mix of marketing strategies to keep their brand engaging on social media platforms through different campaigns and post compositions. Nevertheless, marketing wisdom fails to clarify which components of a post, if any, should remain consistent. Should a brand have a mix of long and short captions or does their social media audience engage with the brand because they provide more or less detail? If a brand uses emojis once, should they always use emojis? Indeed, academics have identified a range of possible factors for analysis including pronouns, syntatic complexity, word meaning, and (number of different factors).
+
+Using a dataset composed of (number of Fortune 500 companies), we model which of these factors are the most significant in predicting social media engagement. 
+
+### What are the differences between platforms?
+
+```{r Importing Libraries and the Main Dataset, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Importing the necessary libraries
+
+library(ggplot2) #Graphs
+library(tidyr) #R Code Formatting
+library(psych) #Psychometric statistics
+library(rmarkdown) #R Markdown File formatting
+library(readxl) #Read in Excel Files
+library(stringr) #Recognize strings
+library(reshape2) #Use to create the pivot table
+library(gt) #Used for nicer tables
+library(car) #Used for VIF
+library(purrr)
+library(flextable)
+library(dplyr) #R Code Formatting
+
+df <- read.csv("C:/Users/txtbn/OneDrive/Documents/BSc Business Analytics - Year Three/BEM3001 - Dissertation/04_Coding/FinalImageDataAnalysis.csv")
+
+```
+
+###EDA
+
+```{r Checking the Data for Null Values}
+dim(df)
+result <- df %>%
+  group_by(platform) %>%
+  summarise(across(everything(), ~sum(is.na(.)), .names = "NA_count_{.col}")) %>%
+  dplyr::select(platform, where(~any(. > 0)))  # Keep only columns with NA values
+
+result2 <- df %>%
+      group_by(platform) %>%
+  summarise(num_observations = n())
+
+result3 <- df %>%
+  drop_na(height, width, linesRatio, selfSimilarity_anisotropy, selfSimilarity_ground,
+          selfSimilarity_parent, texture_directionality, texture_contrast) %>%
+    group_by(platform) %>%
+  summarise(num_observations = n())
+
+df2 <- df %>%
+  drop_na(linesRatio, selfSimilarity_anisotropy, selfSimilarity_ground,
+          selfSimilarity_parent, texture_directionality, texture_contrast) %>%
+  dplyr::select(-height, -width, - linesRatio, -saturation, -brightness_BT601)
+
+print(result)
+print(result2)
+print(result3)
+
+```
+
+There are 4898 photos which were unable to be analysed due to processing errors in the code. 
+
+```{r Column to Mean}
+columns_to_mean <- c('Colorfulness_HSV_Colorfulness_HSV', 'Colorfulness_HSV_Mean_H',
+       'Colorfulness_HSV_Mean_S', 'Colorfulness_HSV_Mean_V',
+       'Colorfulness_HSV_circular_mean_hue',
+       'Colorfulness_HSV_circular_std_hue', 'Colorfulness_HSV_color_variety',
+       'Colorfulness_HSV_std_H', 'Colorfulness_HSV_std_S',
+       'Colorfulness_HSV_std_V', 'Colorfulness_RGB_Colorfulness_RGB',
+       'Colorfulness_RGB_Mean_B', 'Colorfulness_RGB_Mean_G',
+       'Colorfulness_RGB_Mean_R', 'Colorfulness_RGB_std_B',
+       'Colorfulness_RGB_std_G', 'Colorfulness_RGB_std_R', 'Colors_Aqua',
+       'Colors_Black', 'Colors_Blue', 'Colors_Fuchsia', 'Colors_Gray',
+       'Colors_Green', 'Colors_Lime', 'Colors_Maroon', 'Colors_Navy',
+       'Colors_Olive', 'Colors_Purple', 'Colors_Red', 'Colors_Silver',
+       'Colors_Teal', 'Colors_White', 'Colors_Yellow', 'Number_of_Faces_Cv2',
+       'Symmetry_QTD', 'VC_gradient', 'VC_quadTree', 'VC_weight',
+       'brightness_BT709', 'contrast_michelson',
+       'contrast_rms', 'object_count',
+       'selfSimilarity_anisotropy', 'selfSimilarity_ground',
+       'selfSimilarity_neighbors', 'selfSimilarity_parent', 'shape_n_line',
+       'shape_n_line_hor', 'shape_n_line_slant', 'shape_n_line_ver',
+       'sharpness_sharp_laplacian', 'texture_coarseness', 'texture_contrast',
+       'texture_directionality', 'negative', 'neutral', 'positive',
+       'hashtag', 'mention', 'emoji', 'length', 'hashtag_count',
+       'mention_count', 'time', 'weekend', "facebook_followers", "instagram_followers",
+       'twitter_followers', 'single', 'order')
+
+```
+
+There are no missing values.
+
+###Modelling Preperation
+
+```{r Creating a DataFrame for Modelling}
+
+company_stats <- df2 %>%
+  group_by(company) %>%
+  summarise(
+    sum_likes = sum(num_likes, na.rm = TRUE),
+    sum_comments = sum(num_comments, na.rm = TRUE),
+    across(all_of(columns_to_mean), ~ mean(.x, na.rm = TRUE), .names = "mean_{.col}")
+  ) %>%
+  mutate(
+    log_sum_likes = log(sum_likes),
+    log_sum_comments = log(sum_comments)
+  )
+
+# Scale the mean columns (standardize them)
+scaled_means <- company_stats %>%
+  dplyr::select(starts_with("mean_")) %>%
+  scale() %>%
+  as.data.frame()
+
+# Rename scaled mean columns
+colnames(scaled_means) <- gsub("^V", "mean_", colnames(scaled_means))
+
+# Combine the data
+model_table <- company_stats %>%
+  dplyr::select(-starts_with("mean_"), - sum_likes, -sum_comments) %>%
+  bind_cols(scaled_means)
+# Inspect the first few rows of the final model table
+head(model_table)
+```
+
+### Consistency Analysis
+
+
+```{r Inspecting the Model for Multicollinearity using a Heatmap}
+
+dta <- df2
+
+multi_subset <- dta %>%
+  mutate(across(all_of(columns_to_mean), scale)) %>%
+  dplyr::select(Colorfulness_HSV_Colorfulness_HSV:texture_directionality)
+
+# Perform the correlation test
+correlation_results <- psych::corr.test(data.frame(na.omit(multi_subset)))
+
+# Extract the correlation matrix
+correlation_matrix <- correlation_results$r
+
+# Reshape the correlation matrix into long format
+correlation_long <- reshape2::melt(correlation_matrix, varnames = c("Variable1", "Variable2"), value.name = "Correlation")
+
+# Create the heatmap
+heatmap <- ggplot(data = correlation_long, aes(x = Variable1, y = Variable2, fill = Correlation)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1, 1), space = "Lab", 
+                       name = "Pearson\nCorrelation") +
+  labs(title = "Pearson Correlation between Variables") + 
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 6, hjust = 1),
+        axis.text.y = element_text(size = 6),
+        plot.title = element_text(hjust = 0.5)) + 
+  coord_fixed()
+
+# Print the heatmap
+print(heatmap)
+```
+The heatmap reveals that certain variables, such as the REGEX variables, exhibit high levels of multicollinearity. To confirm whether a factor analysis should be conducted, 
+
+
+## Factor Analysis
+
+```{r Basic Scree Plot to Determine the Number of Factors}
+scree(multi_subset[,])
+```
+
+
+
+
+```{r 15 Factors Factor Analysis}
+pc15.out <- principal(multi_subset[,], nfactors = 15, rotate = "varimax")
+```
+
+```{r Eigenvalues and Variance of the 15 Factors}
+
+#Generating the eigenvalues for the 15 Factors
+
+pca_eigenvalues <- pc15.out$values[1:15]
+
+print("The eigenvalues for the 15 factors:")
+print(pca_eigenvalues)
+
+#Computing the variance explained by each factor
+
+pca_variance <- 100*pca_eigenvalues/length(pc15.out$values)
+
+print("The variance explained by each of the 15 factors:")
+print(pca_variance)
+
+```
+
+```{r Understanding the Factor Groups}
+
+loadings <- print(pc15.out$loadings, cutoff=0, digits=3)
+
+get_max_and_second_max <- function(x) {
+  sorted_indices <- order(abs(x), decreasing = TRUE)
+  max_index <- sorted_indices[1]
+  second_max_index <- sorted_indices[2]
+  
+  c(max_value = x[max_index], 
+    max_component = colnames(loadings)[max_index],
+    second_max_value = x[second_max_index], 
+    second_max_component = colnames(loadings)[second_max_index])
+}
+
+# Apply the function to each row of the loadings matrix
+max_and_second_max_info <- t(apply(loadings, 1, get_max_and_second_max))
+
+# Convert to a data frame
+max_and_second_max_df <- as.data.frame(max_and_second_max_info)
+colnames(max_and_second_max_df) <- c("MaxValue", "MaxComponent", "SecondMaxValue", "SecondMaxComponent")
+
+# Reorder columns
+max_and_second_max_df <- max_and_second_max_df[, c("MaxValue", "MaxComponent", "SecondMaxValue", "SecondMaxComponent")]
+
+sorted_max_and_second_max_df <- max_and_second_max_df %>%
+  arrange(MaxComponent)
+
+# Print the sorted data frame
+print(sorted_max_and_second_max_df)
+```
+
+Component 1: HSV std value, RGB std Blue, RGB std Red, RGB std Green, contrast michelson, contrast rms, texture contrast - contrast
+Component 2: Mean Value, RGB Blue, RGB Green, RGB Red, Black (-), Silver, White, Brightness - color_intensity_brightness
+Component 3: Anisotropy (-), Ground, Neighbors, Parent - Space
+Component 4: HSV colorfulness, mean sauration, std saturation, navy, teal - colorfulness_saturation
+Component 5: Mean hue, circular mean hue, olive (-), yellow (-) - hue_characteristics
+Component 6: Horizontal lines, slanted lines -  horizontal_slanted
+Component 7: VC gradient, VC weight, object count, sharpness, coarseness (-) - visual_complexity_sharpness
+Component 8: Std Hue, Maroon, Red - hue_variation_warm
+Component 9: Color variety, Gray, Symmetry, VC Quadtree - color_variety_symmetry
+Component 10: Circular std hue, RGB Colorfulness - hue_consistency
+Component 11: Number of lines, vertical lines - line_density
+Component 12: Fuscia, Purple - purple
+Component 13: Aqua, Blue - cool
+Component 14: Faces, directionality (-) - face_direction
+Component 15: Green, Lime - green
+
+### Revised Groupings
+
+```{r Defining columns_to_mean and columns_to_exclude}
+component_names <- c(
+  "contrast", 
+  "color_intensity_brightness", 
+  "space", 
+  "visual_complexity_sharpness", 
+  "colorfulness_saturation",
+  "color_variety_symmetry",
+  "hue_characteristics",
+  "hue_consistency",
+  "horizontal_slanted", 
+  "hue_variation_warm",
+  "line_density", 
+  "purple", 
+  "cool", 
+  "green",
+  "face_direction"
+)
+
+pc_scores <- as.data.frame(pc15.out$scores)
+
+# Apply the correct column names
+colnames(pc_scores) <- component_names
+
+df3 <- cbind(df2, pc_scores)
+
+df3 <- df3 %>%
+  mutate(valence = (positive - negative) * (1 - neutral)) %>%
+  mutate(across(c(facebook_followers, instagram_followers, twitter_followers), log)) %>%
+  mutate(followers = case_when(
+    platform == "facebook" ~ facebook_followers,
+    platform == "instagram" ~ instagram_followers,
+    platform == "twitter" ~ twitter_followers
+  )) %>%
+  select(-facebook_followers, -instagram_followers, -twitter_followers) # Remove original columns
+
+df4 <- df3 %>%
+  dplyr::select(company, platform, num_likes, num_comments,negative:valence, followers, -negative, -neutral, -positive)
+
+```
+
+###Original Dataset
+
+```{r Facebook vs Instagram}
+#Skipping Analytic for now, go back and run it
+library(dplyr)
+
+# Step 1: Define the metrics for Facebook and Instagram
+metrics_df <- df2 %>%
+  filter(platform %in% c("facebook", "instagram")) %>%
+  group_by(company, platform) %>%
+  reframe(
+    sum_likes = sum(num_likes, na.rm = TRUE),
+    sum_comments = sum(num_comments, na.rm = TRUE),
+    across(all_of(columns_to_mean), ~ mean(.x, na.rm = TRUE), .names = "mean_{.col}")
+  )
+
+# Step 2: Pivot the data to have separate columns for each platform
+pivot_df <- metrics_df %>%
+  pivot_wider(names_from = platform, values_from = c(
+    sum_likes, sum_comments, starts_with("mean_")
+  )) %>%
+  # Ensure company column is included
+  select(company, everything())
+
+# Step 3: Calculate differences between Facebook and Instagram
+# Calculate and scale differences between Facebook and Instagram
+
+columns_to_check <- pivot_df %>%
+  select(starts_with("mean_")) %>%
+  colnames()
+
+# Include other specific columns as well
+columns_to_check <- c("company",
+  "sum_likes_facebook", "sum_likes_instagram",
+  "sum_comments_facebook", "sum_comments_instagram",
+  columns_to_check
+)
+
+# Filter out rows with missing values in the selected columns
+complete_df <- pivot_df %>%
+  filter(complete.cases(select(., all_of(columns_to_check))))
+
+# Use mutate to add difference columns and retain only the necessary columns
+facebook_instagram_diff <- complete_df %>%
+  mutate(
+    log_sum_likes = log(sum_likes_facebook + sum_likes_instagram),
+    log_sum_comments = log(sum_comments_facebook + sum_comments_instagram),
+    across(
+      all_of(columns_to_check[grepl("mean_.*_facebook", columns_to_check)]),
+      .names = "{col}_diff",
+      ~ scale(abs(. - get(sub("facebook", "instagram", cur_column()))))
+    )
+  ) %>%
+  # Keep only the company and new difference columns
+  select(company, starts_with("log_"), ends_with("_diff"))
+
+```
+
+```{r Facebook vs Twitter, echo = FALSE}
+
+# Step 1: Define the metrics for Facebook and Twitter
+metrics_df <- df2 %>%
+  filter(platform %in% c("facebook", "twitter")) %>%
+  group_by(company, platform) %>%
+  reframe(
+    sum_likes = sum(num_likes, na.rm = TRUE),
+    sum_comments = sum(num_comments, na.rm = TRUE),
+    across(all_of(columns_to_mean), ~ mean(.x, na.rm = TRUE), .names = "mean_{.col}")
+  )
+
+# Step 2: Pivot the data to have separate columns for each platform
+pivot_df <- metrics_df %>%
+  pivot_wider(names_from = platform, values_from = c(
+    sum_likes, sum_comments, starts_with("mean_")
+  )) %>%
+  # Ensure company column is included
+  select(company, everything())
+
+# Step 3: Calculate differences between Facebook and Twitter
+# Calculate and scale differences between Facebook and Twitter
+
+columns_to_check <- pivot_df %>%
+  select(starts_with("mean_")) %>%
+  colnames()
+
+# Include other specific columns as well
+columns_to_check <- c("company",
+  "sum_likes_facebook", "sum_likes_twitter",
+  "sum_comments_facebook", "sum_comments_twitter",
+  columns_to_check
+)
+
+# Filter out rows with missing values in the selected columns
+complete_df <- pivot_df %>%
+  filter(complete.cases(select(., all_of(columns_to_check))))
+
+# Use mutate to add difference columns and retain only the necessary columns
+facebook_twitter_diff <- complete_df %>%
+  mutate(
+    log_sum_likes = log(sum_likes_facebook + sum_likes_twitter),
+    log_sum_comments = log(sum_comments_facebook + sum_comments_twitter),
+    across(
+      all_of(columns_to_check[grepl("mean_.*_facebook", columns_to_check)]),
+      .names = "{col}_diff",
+      ~ scale(abs(. - get(sub("facebook", "twitter", cur_column()))))
+    )
+  ) %>%
+  # Keep only the company and new difference columns
+  select(company, starts_with("log_"), ends_with("_diff"))
+
+
+```
+
+```{r Instagram vs Twitter, echo = FALSE}
+
+# Step 1: Define the metrics for Instagram and Twitter
+metrics_df <- df2 %>%
+  filter(platform %in% c("instagram", "twitter")) %>%
+  group_by(company, platform) %>%
+  reframe(
+    sum_likes = sum(num_likes, na.rm = TRUE),
+    sum_comments = sum(num_comments, na.rm = TRUE),
+    across(all_of(columns_to_mean), ~ mean(.x, na.rm = TRUE), .names = "mean_{.col}")
+  )
+
+# Step 2: Pivot the data to have separate columns for each platform
+pivot_df <- metrics_df %>%
+  pivot_wider(names_from = platform, values_from = c(
+    sum_likes, sum_comments, starts_with("mean_")
+  )) %>%
+  # Explicitly select company column to ensure it is preserved
+  select(company, everything())
+
+# Step 3: Calculate differences between Instagram and Twitter
+# Calculate and scale differences between Instagram and Twitter
+
+columns_to_check <- pivot_df %>%
+  select(starts_with("mean_")) %>%
+  colnames()
+
+# Include other specific columns as well
+columns_to_check <- c("company",
+  "sum_likes_instagram", "sum_likes_twitter",
+  "sum_comments_instagram", "sum_comments_twitter",
+  columns_to_check
+)
+
+# Filter out rows with missing values in the selected columns
+complete_df <- pivot_df %>%
+  filter(complete.cases(select(., all_of(columns_to_check))))
+
+instagram_twitter_diff <- complete_df %>%
+  mutate(
+    log_sum_likes = log(sum_likes_instagram + sum_likes_twitter),
+    log_sum_comments = log(sum_comments_instagram + sum_comments_twitter),
+    across(
+      all_of(columns_to_check[grepl("mean_.*_instagram", columns_to_check)]),
+      .names = "{col}_diff",
+      ~ scale(abs(. - get(sub("instagram", "twitter", cur_column()))))
+    )
+  ) %>%
+  # Keep only the company and new difference columns
+  select(company, starts_with("log_"), ends_with("_diff"))
+
+
+```
+
+### Linear Regression
+
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5287121/
+
+```{r Likes Models}
+
+#Creating the subsets 
+
+likes_subset_1 <- facebook_instagram_diff %>%
+  select(-c(company, log_sum_comments))
+
+likes_subset_2 <- facebook_twitter_diff %>%
+  select(-c(company, log_sum_comments))
+
+likes_subset_3 <- instagram_twitter_diff %>%
+  select(-c(company, log_sum_comments))
+
+
+#Building the models
+
+m1 <- lm(log_sum_likes ~., data = likes_subset_1)
+
+m2 <- lm(log_sum_likes ~., data = likes_subset_2)
+
+m3 <- lm(log_sum_likes ~., data = likes_subset_3)
+
+likes = data.frame(c(columns_to_mean), m1$coefficients[2:66], summary(m1)$coefficients[,2][2:66], m2$coefficients[2:66], summary(m2)$coefficients[,2][2:66], m3$coefficients[2:66], summary(m3)$coefficients[,2][2:66])
+names(likes)<-c("variable", "B.fb.ig", "SE.fb.ig", "B.fb.tw", "SE.fb.tw", "B.ig.tw", "SE.ig.tw")
+
+likes$weight.fb.ig = 1/(likes$SE.fb.ig^2)
+likes$weight.fb.tw = 1/(likes$SE.fb.tw^2)
+likes$weight.ig.tw = 1/(likes$SE.ig.tw^2)
+
+likes$meta.b = ((likes$B.fb.ig * likes$weight.fb.ig) + (likes$B.fb.tw *likes$weight.fb.tw) + (likes$B.ig.tw *likes$weight.ig.tw))/(likes$weight.fb.ig + likes$weight.fb.tw + likes$weight.ig.tw)
+
+likes$meta.SE = 1/(sqrt(likes$weight.fb.ig + likes$weight.fb.tw + likes$weight.ig.tw))
+likes$LLCI = likes$meta.b - 1.96*likes$meta.SE
+likes$ULCI = likes$meta.b + 1.96*likes$meta.SE
+likes$output = paste0(round(likes$meta.b, digits = 2), " [", round(likes$LLCI, digits = 2), ", ", round(likes$ULCI, digits = 2), "]")
+
+```
+
+```{r Comment Models}
+comments_subset_1 <- facebook_instagram_diff %>%
+  select(-c(company, log_sum_likes))
+
+comments_subset_2 <- facebook_twitter_diff %>%
+  select(-c(company, log_sum_likes))
+
+comments_subset_3 <- instagram_twitter_diff %>%
+  select(-c(company, log_sum_likes))
+
+#Building the models
+
+comments_subset_1 <- comments_subset_1 %>%
+  mutate(log_sum_comments = ifelse(is.infinite(log_sum_comments), NA, log_sum_comments))
+
+m4 <- lm(log_sum_comments ~., data = comments_subset_1)
+
+summary(m4)
+sort(vif(m4), decreasing = TRUE)
+
+m5 <- lm(log_sum_comments ~., data = comments_subset_2)
+
+summary(m5)
+
+m6 <- lm(log_sum_comments ~., data = comments_subset_3)
+summary(m6)
+
+comments = data.frame(c(columns_to_mean), m4$coefficients[2:66], summary(m4)$coefficients[,2][2:66], m5$coefficients[2:66], summary(m5)$coefficients[,2][2:66], m6$coefficients[2:66], summary(m6)$coefficients[,2][2:66])
+names(comments)<-c("variable", "B.fb.ig", "SE.fb.ig", "B.fb.tw", "SE.fb.tw", "B.ig.tw", "SE.ig.tw")
+
+comments$weight.fb.ig = 1/(comments$SE.fb.ig^2)
+comments$weight.fb.tw = 1/(comments$SE.fb.tw^2)
+comments$weight.ig.tw = 1/(comments$SE.ig.tw^2)
+
+comments$meta.b = ((comments$B.fb.ig * comments$weight.fb.ig) + (comments$B.fb.tw *comments$weight.fb.tw) + (comments$B.ig.tw *comments$weight.ig.tw))/(comments$weight.fb.ig + comments$weight.fb.tw + comments$weight.ig.tw)
+
+comments$meta.SE = 1/(sqrt(comments$weight.fb.ig + comments$weight.fb.tw + comments$weight.ig.tw))
+comments$LLCI = comments$meta.b - 1.96*comments$meta.SE
+comments$ULCI = comments$meta.b + 1.96*comments$meta.SE
+comments$output = paste0(round(comments$meta.b, digits = 2), " [", round(comments$LLCI, digits = 2), ", ", round(comments$ULCI, digits = 2), "]")
+
+```
+
+
+# Final data frame
+
+```{r}
+
+d1 = data.frame(likes$variable, likes$output)
+d2 = data.frame(comments$output)
+
+
+table = cbind(d1, d2)
+names(table) = c("Predictor", "Likes", "Comments")
+
+#tab <- nice_table(table)
+#print(tab, preview = "docx")
+
+print(table)
+
+```
+
+Colorfulness Mean Hue: Likes, RGB std blue: comments, Yellow: likes (-), Symmetry: likes (-), comments (-)
+Visual complexity Quad: likes, selfSimilarity_ground: likes, comments, selfSimilarity_neighbors: likes (-), comments (-), selfSimilarity_parent: likes, slanted lines: comments (-), negative: comments, emoji: likes and comments, length: likes (-), comments (-)
+
+Consistency Favours: Yellow (likes), Symmetry (likes, comments), selfSimilarity_neighbors (likes, comments), slanted lines (comments), length (likes, comments)
+
+Inconsistency Favours: Hue (likes), Std blue (comments), visual complexity (likes), selfSimilarity_ground (likes, comments), selfSimilarity_pparent (likes), negative (comments), emoji (likes, comments)
+
+```{r Signficance}
+#Mean Hue: Likes, #Visual Complexity Quad Tree: Likes and Comments, #Self-Similarity-Ground: Likes, #Self-Similarity Parent: Likes, emoji: Likes and Comments
+```
+
+###Revised Dataset
+
+```{r New Model Names}
+
+model_names <- c("contrast", "color_intensity_brightness", "space", "colorfulness_saturation", "hue_characteristics", "horizontal_slanted", "visual_complexity_sharpness", "hue_variation_warm","color_variety_symmetry", "hue_consistency", "line_density", "purple", "cool", "face_direction", "green",'valence', 'emoji', 'length', 'hashtag_count','mention_count', 'time', 'weekend', 'single', 'order', 'followers')
+
+```
+
+```{r Facebook vs Instagram}
+#Skipping Analytic for now, go back and run it
+
+# Step 1: Define the metrics for Facebook and Instagram
+metrics_df <- df4 %>%
+  filter(platform %in% c("facebook", "instagram")) %>%
+  group_by(company, platform) %>%
+  reframe(
+    sum_likes = sum(num_likes, na.rm = TRUE),
+    sum_comments = sum(num_comments, na.rm = TRUE),
+    across(all_of(model_names), ~ mean(.x, na.rm = TRUE), .names = "mean_{.col}")
+  )
+
+# Step 2: Pivot the data to have separate columns for each platform
+pivot_df <- metrics_df %>%
+  pivot_wider(names_from = platform, values_from = c(
+    sum_likes, sum_comments, starts_with("mean_")
+  )) %>%
+  # Ensure company column is included
+  dplyr::select(company, everything())
+
+# Step 3: Calculate differences between Facebook and Instagram
+# Calculate and scale differences between Facebook and Instagram
+
+columns_to_check <- pivot_df %>%
+  dplyr::select(starts_with("mean_")) %>%
+  colnames()
+
+# Include other specific columns as well
+columns_to_check <- c("company",
+  "sum_likes_facebook", "sum_likes_instagram",
+  "sum_comments_facebook", "sum_comments_instagram", 
+  columns_to_check
+)
+
+# Filter out rows with missing values in the selected columns
+complete_df <- pivot_df %>%
+  filter(complete.cases(dplyr::select(., all_of(columns_to_check))))
+
+# Use mutate to add difference columns and retain only the necessary columns
+facebook_instagram_diff <- complete_df %>%
+  mutate(
+    log_sum_likes = log(sum_likes_facebook + sum_likes_instagram),
+    log_sum_comments = log(sum_comments_facebook + sum_comments_instagram),
+    across(
+      all_of(columns_to_check[grepl("mean_.*_facebook", columns_to_check)]),
+      .names = "{col}_diff",
+      ~ scale(abs(. - get(sub("facebook", "instagram", cur_column()))))
+    )
+  ) %>%
+  # Keep only the company and new difference columns
+  select(company, starts_with("log_"), ends_with("_diff"))
+
+```
+
+```{r Facebook vs Twitter, echo = FALSE}
+
+# Step 1: Define the metrics for Facebook and Twitter
+metrics_df <- df4 %>%
+  filter(platform %in% c("facebook", "twitter")) %>%
+  group_by(company, platform) %>%
+  reframe(
+    sum_likes = sum(num_likes, na.rm = TRUE),
+    sum_comments = sum(num_comments, na.rm = TRUE),
+    across(all_of(model_names), ~ mean(.x, na.rm = TRUE), .names = "mean_{.col}")
+  )
+
+# Step 2: Pivot the data to have separate columns for each platform
+pivot_df <- metrics_df %>%
+  pivot_wider(names_from = platform, values_from = c(
+    sum_likes, sum_comments, starts_with("mean_")
+  )) %>%
+  # Ensure company column is included
+  select(company, everything())
+
+# Step 3: Calculate differences between Facebook and Twitter
+# Calculate and scale differences between Facebook and Twitter
+
+columns_to_check <- pivot_df %>%
+  select(starts_with("mean_")) %>%
+  colnames()
+
+# Include other specific columns as well
+columns_to_check <- c("company",
+  "sum_likes_facebook", "sum_likes_twitter",
+  "sum_comments_facebook", "sum_comments_twitter",
+  columns_to_check
+)
+
+# Filter out rows with missing values in the selected columns
+complete_df <- pivot_df %>%
+  filter(complete.cases(select(., all_of(columns_to_check))))
+
+# Use mutate to add difference columns and retain only the necessary columns
+facebook_twitter_diff <- complete_df %>%
+  mutate(
+    log_sum_likes = log(sum_likes_facebook + sum_likes_twitter),
+    log_sum_comments = log(sum_comments_facebook + sum_comments_twitter),
+    across(
+      all_of(columns_to_check[grepl("mean_.*_facebook", columns_to_check)]),
+      .names = "{col}_diff",
+      ~ scale(abs(. - get(sub("facebook", "twitter", cur_column()))))
+    )
+  ) %>%
+  # Keep only the company and new difference columns
+  select(company, starts_with("log_"), ends_with("_diff"))
+
+
+```
+
+```{r Instagram vs Twitter, echo = FALSE}
+
+# Step 1: Define the metrics for Instagram and Twitter
+metrics_df <- df4 %>%
+  filter(platform %in% c("instagram", "twitter")) %>%
+  group_by(company, platform) %>%
+  reframe(
+    sum_likes = sum(num_likes, na.rm = TRUE),
+    sum_comments = sum(num_comments, na.rm = TRUE),
+    across(all_of(model_names), ~ mean(.x, na.rm = TRUE), .names = "mean_{.col}")
+  )
+
+# Step 2: Pivot the data to have separate columns for each platform
+pivot_df <- metrics_df %>%
+  pivot_wider(names_from = platform, values_from = c(
+    sum_likes, sum_comments, starts_with("mean_")
+  )) %>%
+  # Explicitly select company column to ensure it is preserved
+  select(company, everything())
+
+# Step 3: Calculate differences between Instagram and Twitter
+# Calculate and scale differences between Instagram and Twitter
+
+columns_to_check <- pivot_df %>%
+  select(starts_with("mean_")) %>%
+  colnames()
+
+# Include other specific columns as well
+columns_to_check <- c("company",
+  "sum_likes_instagram", "sum_likes_twitter",
+  "sum_comments_instagram", "sum_comments_twitter",
+  columns_to_check
+)
+
+# Filter out rows with missing values in the selected columns
+complete_df <- pivot_df %>%
+  filter(complete.cases(select(., all_of(columns_to_check))))
+
+instagram_twitter_diff <- complete_df %>%
+  mutate(
+    log_sum_likes = log(sum_likes_instagram + sum_likes_twitter),
+    log_sum_comments = log(sum_comments_instagram + sum_comments_twitter),
+    across(
+      all_of(columns_to_check[grepl("mean_.*_instagram", columns_to_check)]),
+      .names = "{col}_diff",
+      ~ scale(abs(. - get(sub("instagram", "twitter", cur_column()))))
+    )
+  ) %>%
+  # Keep only the company and new difference columns
+  select(company, starts_with("log_"), ends_with("_diff"))
+
+
+```
+
+### Linear Regression
+
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5287121/
+
+```{r Likes Models}
+
+#Creating the subsets 
+
+likes_subset_1 <- facebook_instagram_diff %>%
+  select(-c(company, log_sum_comments))
+
+likes_subset_2 <- facebook_twitter_diff %>%
+  select(-c(company, log_sum_comments))
+
+likes_subset_3 <- instagram_twitter_diff %>%
+  select(-c(company, log_sum_comments))
+
+#Building the models
+
+m1 <- lm(log_sum_likes ~., data = likes_subset_1)
+
+summary(m1)
+sort(vif(m1), decreasing = TRUE)
+
+m2 <- lm(log_sum_likes ~., data = likes_subset_2)
+
+summary(m2)
+
+m3 <- lm(log_sum_likes ~., data = likes_subset_3)
+summary(m3)
+
+model_names <- c("contrast", "color_intensity_brightness", "space", "colorfulness_saturation", "hue_characteristics", "horizontal_slanted", "visual_complexity_sharpness", "hue_variation_warm","color_variety_symmetry", "hue_consistency", "line_density", "purple", "cool", "face_direction", "green",'valence', 'emoji', 'length', 'hashtag_count','mention_count', 'time', 'weekend', 'single', 'order', 'followers')
+
+likes = data.frame(c(model_names), m1$coefficients[2:length(m1$coefficients)], summary(m1)$coefficients[,2][2:length(m1$coefficients)], m2$coefficients[2:length(m1$coefficients)], summary(m2)$coefficients[,2][2:length(m1$coefficients)], m3$coefficients[2:length(m1$coefficients)], summary(m3)$coefficients[,2][2:length(m1$coefficients)])
+names(likes)<-c("variable", "B.fb.ig", "SE.fb.ig", "B.fb.tw", "SE.fb.tw", "B.ig.tw", "SE.ig.tw")
+
+likes$weight.fb.ig = 1/(likes$SE.fb.ig^2)
+likes$weight.fb.tw = 1/(likes$SE.fb.tw^2)
+likes$weight.ig.tw = 1/(likes$SE.ig.tw^2)
+
+likes$meta.b = ((likes$B.fb.ig * likes$weight.fb.ig) + (likes$B.fb.tw *likes$weight.fb.tw) + (likes$B.ig.tw *likes$weight.ig.tw))/(likes$weight.fb.ig + likes$weight.fb.tw + likes$weight.ig.tw)
+
+likes$meta.SE = 1/(sqrt(likes$weight.fb.ig + likes$weight.fb.tw + likes$weight.ig.tw))
+likes$LLCI = likes$meta.b - 1.96*likes$meta.SE
+likes$ULCI = likes$meta.b + 1.96*likes$meta.SE
+likes$output = paste0(round(likes$meta.b, digits = 2), " [", round(likes$LLCI, digits = 2), ", ", round(likes$ULCI, digits = 2), "]")
+
+```
+
+```{r Comment Models}
+# Creating the subsets
+comments_subset_1 <- facebook_instagram_diff %>%
+  select(-c(company, log_sum_likes))
+
+comments_subset_2 <- facebook_twitter_diff %>%
+  select(-c(company, log_sum_likes))
+
+comments_subset_3 <- instagram_twitter_diff %>%
+  select(-c(company, log_sum_likes))
+
+# Building the models
+m1 <- lm(log_sum_comments ~., data = comments_subset_1)
+summary(m1)
+sort(vif(m1), decreasing = TRUE)
+
+m2 <- lm(log_sum_comments ~., data = comments_subset_2)
+summary(m2)
+
+m3 <- lm(log_sum_comments ~., data = comments_subset_3)
+summary(m3)
+
+# Model names (unchanged)
+model_names <- c("contrast", "color_intensity_brightness", "space", "colorfulness_saturation", "hue_characteristics", "horizontal_slanted", "visual_complexity_sharpness", "hue_variation_warm","color_variety_symmetry", "hue_consistency", "line_density", "purple", "cool", "face_direction", "green",'valence', 'emoji', 'length', 'hashtag_count','mention_count', 'time', 'weekend', 'single', 'order', 'followers')
+
+# Adjusting the results to reflect "comments" instead of "likes"
+comments <- data.frame(c(model_names), m1$coefficients[2:length(m1$coefficients)], summary(m1)$coefficients[,2][2:length(m1$coefficients)], m2$coefficients[2:length(m1$coefficients)], summary(m2)$coefficients[,2][2:length(m1$coefficients)], m3$coefficients[2:length(m1$coefficients)], summary(m3)$coefficients[,2][2:length(m1$coefficients)])
+names(comments) <- c("variable", "B.fb.ig", "SE.fb.ig", "B.fb.tw", "SE.fb.tw", "B.ig.tw", "SE.ig.tw")
+
+comments$weight.fb.ig = 1/(comments$SE.fb.ig^2)
+comments$weight.fb.tw = 1/(comments$SE.fb.tw^2)
+comments$weight.ig.tw = 1/(comments$SE.ig.tw^2)
+
+comments$meta.b = ((comments$B.fb.ig * comments$weight.fb.ig) + (comments$B.fb.tw *comments$weight.fb.tw) + (comments$B.ig.tw *comments$weight.ig.tw))/(comments$weight.fb.ig + comments$weight.fb.tw + comments$weight.ig.tw)
+
+comments$meta.SE = 1/(sqrt(comments$weight.fb.ig + comments$weight.fb.tw + comments$weight.ig.tw))
+comments$LLCI = comments$meta.b - 1.96*comments$meta.SE
+comments$ULCI = comments$meta.b + 1.96*comments$meta.SE
+comments$output = paste0(round(comments$meta.b, digits = 2), " [", round(comments$LLCI, digits = 2), ", ", round(comments$ULCI, digits = 2), "]")
+
+
+```
+
+
+# Final data frame
+
+```{r}
+
+d1 = data.frame(likes$variable, likes$output)
+d2 = data.frame(comments$output)
+
+
+table = cbind(d1, d2)
+names(table) = c("Predictor", "Likes", "Comments")
+
+#tab <- nice_table(table)
+#print(tab, preview = "docx")
+
+print(table)
+
+```
+
+## Poly Models
+
+```{r Likes Models}
+
+#Creating the subsets 
+
+likes_subset_1 <- facebook_instagram_diff %>%
+  select(-c(company, log_sum_comments))
+
+# Identify all predictors except the dependent variable
+predictors <- colnames(likes_subset_1)[colnames(likes_subset_1) != "log_sum_likes"]
+
+# Generate polynomial terms for all predictors up to the second degree
+formula_poly <- paste("log_sum_likes ~",
+                      paste(sapply(predictors, function(var) paste0("poly(", var, ", 2, raw = TRUE)")), collapse = " + "))
+
+#Building the models
+
+# Fit the polynomial regression model
+m1 <- lm(as.formula(formula_poly), data = likes_subset_1)
+
+likes_subset_2 <- facebook_twitter_diff %>%
+  select(-c(company, log_sum_comments))
+
+# Identify all predictors except the dependent variable
+predictors <- colnames(likes_subset_2)[colnames(likes_subset_2) != "log_sum_likes"]
+
+# Generate polynomial terms for all predictors up to the second degree
+formula_poly <- paste("log_sum_likes ~",
+                      paste(sapply(predictors, function(var) paste0("poly(", var, ", 2, raw = TRUE)")), collapse = " + "))
+
+m2 <- lm(as.formula(formula_poly), data = likes_subset_2)
+
+likes_subset_3 <- instagram_twitter_diff %>%
+  select(-c(company, log_sum_comments))
+
+# Identify all predictors except the dependent variable
+predictors <- colnames(likes_subset_3)[colnames(likes_subset_3) != "log_sum_likes"]
+
+# Generate polynomial terms for all predictors up to the second degree
+formula_poly <- paste("log_sum_likes ~",
+                      paste(sapply(predictors, function(var) paste0("poly(", var, ", 2, raw = TRUE)")), collapse = " + "))
+
+m3 <- lm(as.formula(formula_poly), data = likes_subset_3)
+
+likes = data.frame(c(model_names), m1$coefficients[2:27], summary(m1)$coefficients[,2][2:27], m2$coefficients[2:27], summary(m2)$coefficients[,2][2:27], m3$coefficients[2:27], summary(m3)$coefficients[,2][2:27])
+names(likes)<-c("variable", "B.fb.ig", "SE.fb.ig", "B.fb.tw", "SE.fb.tw", "B.ig.tw", "SE.ig.tw")
+
+likes$weight.fb.ig = 1/(likes$SE.fb.ig^2)
+likes$weight.fb.tw = 1/(likes$SE.fb.tw^2)
+likes$weight.ig.tw = 1/(likes$SE.ig.tw^2)
+
+likes$meta.b = ((likes$B.fb.ig * likes$weight.fb.ig) + (likes$B.fb.tw *likes$weight.fb.tw) + (likes$B.ig.tw *likes$weight.ig.tw))/(likes$weight.fb.ig + likes$weight.fb.tw + likes$weight.ig.tw)
+
+likes$meta.SE = 1/(sqrt(likes$weight.fb.ig + likes$weight.fb.tw + likes$weight.ig.tw))
+likes$LLCI = likes$meta.b - 1.96*likes$meta.SE
+likes$ULCI = likes$meta.b + 1.96*likes$meta.SE
+likes$output = paste0(round(likes$meta.b, digits = 2), " [", round(likes$LLCI, digits = 2), ", ", round(likes$ULCI, digits = 2), "]")
+
+```
+
+```{r Comment Models}
+comments_subset_1 <- facebook_instagram_diff %>%
+  select(-c(company, log_sum_likes))%>%
+  mutate(log_sum_comments = ifelse(is.infinite(log_sum_comments), NA, log_sum_comments))
+
+# Identify all predictors except the dependent variable
+predictors <- colnames(comments_subset_1)[colnames(comments_subset_1) != "log_sum_comments"]
+
+# Generate polynomial terms for all predictors up to the second degree
+formula_poly <- paste("log_sum_comments ~",
+                      paste(sapply(predictors, function(var) paste0("poly(", var, ", 2, raw = TRUE)")), collapse = " + "))
+
+# Fit the polynomial regression model
+m4 <- lm(as.formula(formula_poly), data = comments_subset_1)
+
+comments_subset_2 <- facebook_twitter_diff %>%
+    select(-c(company, log_sum_likes))%>%
+  mutate(log_sum_comments = ifelse(is.infinite(log_sum_comments), NA, log_sum_comments))
+
+# Identify all predictors except the dependent variable
+predictors <- colnames(comments_subset_2)[colnames(comments_subset_2) != "log_sum_comments"]
+
+# Generate polynomial terms for all predictors up to the second degree
+formula_poly <- paste("log_sum_comments ~",
+                      paste(sapply(predictors, function(var) paste0("poly(", var, ", 2, raw = TRUE)")), collapse = " + "))
+
+# Fit the polynomial regression model
+m5 <- lm(as.formula(formula_poly), data = comments_subset_2)
+
+comments_subset_3 <- instagram_twitter_diff %>%
+  select(-c(company, log_sum_likes))%>%
+  mutate(log_sum_comments = ifelse(is.infinite(log_sum_comments), NA, log_sum_comments))
+
+# Identify all predictors except the dependent variable
+predictors <- colnames(comments_subset_3)[colnames(comments_subset_3) != "log_sum_comments"]
+
+# Generate polynomial terms for all predictors up to the second degree
+formula_poly <- paste("log_sum_comments ~",
+                      paste(sapply(predictors, function(var) paste0("poly(", var, ", 2, raw = TRUE)")), collapse = " + "))
+
+# Fit the polynomial regression model
+m6 <- lm(as.formula(formula_poly), data = comments_subset_3)
+
+comments = data.frame(c(model_names), m4$coefficients[2:27], summary(m4)$coefficients[,2][2:27], m5$coefficients[2:27], summary(m5)$coefficients[,2][2:27], m6$coefficients[2:27], summary(m6)$coefficients[,2][2:27])
+names(comments)<-c("variable", "B.fb.ig", "SE.fb.ig", "B.fb.tw", "SE.fb.tw", "B.ig.tw", "SE.ig.tw")
+
+comments$weight.fb.ig = 1/(comments$SE.fb.ig^2)
+comments$weight.fb.tw = 1/(comments$SE.fb.tw^2)
+comments$weight.ig.tw = 1/(comments$SE.ig.tw^2)
+
+comments$meta.b = ((comments$B.fb.ig * comments$weight.fb.ig) + (comments$B.fb.tw *comments$weight.fb.tw) + (comments$B.ig.tw *comments$weight.ig.tw))/(comments$weight.fb.ig + comments$weight.fb.tw + comments$weight.ig.tw)
+
+comments$meta.SE = 1/(sqrt(comments$weight.fb.ig + comments$weight.fb.tw + comments$weight.ig.tw))
+comments$LLCI = comments$meta.b - 1.96*comments$meta.SE
+comments$ULCI = comments$meta.b + 1.96*comments$meta.SE
+comments$output = paste0(round(comments$meta.b, digits = 2), " [", round(comments$LLCI, digits = 2), ", ", round(comments$ULCI, digits = 2), "]")
+
+```
+
+
+# Final data frame
+
+```{r}
+
+d1 = data.frame(likes$variable, likes$output)
+d2 = data.frame(comments$output)
+
+
+table = cbind(d1, d2)
+names(table) = c("Predictor", "Likes", "Comments")
+
+#tab <- nice_table(table)
+#print(tab, preview = "docx")
+
+print(table)
+
+```
+
+Contrast: Likes (-)
+Color_intensity_brightness: Comments
+Sharpness: Likes, Comments
+Emoji: Likes, Comments
+
+Consitency Favours: Contrast (likes)
+Inconsitency Favours: Colour_intensity_brightness (comments), sharpness (likes, comments), emoji (likes, comments)

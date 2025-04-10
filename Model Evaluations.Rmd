@@ -1,0 +1,225 @@
+---
+title: "Prediction Analysis"
+author: "Thomas"
+date: "2025-03-17"
+output: word_document
+---
+
+```{r Model Names}
+
+df5 <- df4 #From the consistency analysis
+
+model_names <- c("contrast", "color_intensity_brightness", "space", "colorfulness_saturation", "hue_characteristics", "horizontal_slanted", "visual_complexity_sharpness", "hue_variation_warm","color_variety_symmetry", "hue_consistency", "line_density", "purple", "cool", "face_direction", "green",'valence', 'emoji', 'length', 'hashtag_count', 'time', 'weekend', 'single')
+
+colnames(df5)
+```
+
+
+```{r Prediction}
+# Load required packages
+library(MASS)         # For Negative Binomial model
+library(pscl)         # For Zero-Inflated model
+library(ggplot2)      # For visualization (optional)
+library(tidyr)        # For reshaping data
+library(dplyr)        # For data manipulation
+
+platforms <- c("facebook", "instagram", "twitter")
+results <- list()
+
+# Loop through platforms and collect results
+for (platform in platforms) {
+  
+  # Filter data for the specific platform
+  df_platform <- df5[df5$platform == platform, ]
+  
+  predictors <- paste(model_names, collapse = "+")
+  
+  df_platform[model_names] <- scale(df_platform[model_names])
+  
+  # Create formulas for likes and comments (log-transformed)
+  formula_likes <- as.formula(paste("num_likes ~", predictors))
+  formula_comments <- as.formula(paste("num_comments ~", predictors))
+  formula_log_likes <- as.formula(paste("log(num_likes + 1) ~", predictors))
+  formula_log_comments <- as.formula(paste("log(num_comments + 1) ~", predictors))
+
+  # Poisson Regression model
+  poisson_model_likes <- glm(formula_likes, family = poisson(), data = df_platform)
+  poisson_model_comments <- glm(formula_comments, family = poisson(), data = df_platform)
+  
+  # Zero-Inflated Poisson (ZIP) model
+  zip_model_likes <- zeroinfl(formula_likes, data = df_platform, dist = "poisson")
+  zip_model_comments <- zeroinfl(formula_comments, data = df_platform, dist = "poisson")
+  
+  # Zero-Inflated Negative Binomial (ZINB) model
+  zinb_model_likes <- zeroinfl(formula_likes, data = df_platform, dist = "negbin")
+  zinb_model_comments <- zeroinfl(formula_comments, data = df_platform, dist = "negbin")
+
+  # Log-Linear Regression Model (OLS on log-transformed outcome)
+  log_model_likes <- lm(formula_log_likes, data = df_platform)
+  log_model_comments <- lm(formula_log_comments, data = df_platform)
+
+  # Compare models using AIC, BIC, and Log-Likelihood
+  AIC_likes <- AIC(poisson_model_likes, zip_model_likes, zinb_model_likes, log_model_likes)
+  BIC_likes <- BIC(poisson_model_likes, zip_model_likes, zinb_model_likes, log_model_likes)
+  logLik_likes <- sapply(list(poisson_model_likes, zip_model_likes, zinb_model_likes, log_model_likes), logLik)
+
+  AIC_comments <- AIC(poisson_model_comments, zip_model_comments, zinb_model_comments, log_model_comments)
+  BIC_comments <- BIC(poisson_model_comments, zip_model_comments, zinb_model_comments, log_model_comments)
+  logLik_comments <- sapply(list(poisson_model_comments, zip_model_comments, zinb_model_comments, log_model_comments), logLik)
+
+  # Store results in the results list
+  results[[platform]] <- data.frame(
+    Model = c("Poisson", "ZIP", "ZINB", "Log-Linear"),
+    AIC_Likes = AIC_likes[, 2],
+    BIC_Likes = BIC_likes[, 2],
+    LogLik_Likes = as.numeric(logLik_likes),
+    AIC_Comments = AIC_comments[, 2],
+    BIC_Comments = BIC_comments[, 2],
+    LogLik_Comments = as.numeric(logLik_comments)
+  )
+}
+
+
+# Combine results into a single table
+final_results <- bind_rows(results, .id = "Platform")
+
+# Reshape the results to get a clean table
+final_results_long <- final_results %>%
+  pivot_longer(
+    cols = starts_with("AIC") | starts_with("BIC") | starts_with("LogLik"),
+    names_to = c("Metric", "Type"),
+    names_pattern = "(.*)_(.*)",
+    values_to = "Value"
+  )
+
+# View the reshaped results
+final_results_long
+
+```
+
+```{r Pretty}
+
+library(dplyr)
+library(knitr)
+
+df <- final_results_long[, c('Platform', 'Type', 'Model','Metric', 'Value')]
+
+df_wide <- df %>%
+  pivot_wider(names_from = c(Metric), values_from = Value) %>%
+  arrange(Platform, desc(Type), AIC)
+
+print(df_wide)
+
+```
+
+```{r Log}
+
+image_names <- c("contrast", "color_intensity_brightness", "space", "colorfulness_saturation", "hue_characteristics", "horizontal_slanted", "visual_complexity_sharpness", "hue_variation_warm","color_variety_symmetry", "hue_consistency", "line_density", "purple", "cool", "face_direction", "green")
+
+# Load required packages
+library(ggplot2)      # For visualization (optional)
+library(tidyr)        # For reshaping data
+library(dplyr)        # For data manipulation
+
+# Define model names for each platform
+model_names_facebook <- c(model_names, 'facebook_followers')
+model_names_instagram <- c(model_names, 'instagram_followers')
+model_names_twitter <- c(model_names, 'twitter_followers')
+
+df5 <- df5 %>%
+  group_by(company, platform) %>%
+  mutate(across(all_of(image_names), 
+                ~ abs(. - mean(.)), .names = "consistency_{.col}")) %>%
+  ungroup()
+
+consistency_vars <- paste("consistency_", image_names, sep = "")
+
+interaction_terms <- paste(
+  image_names, 
+  consistency_vars, 
+  sep = ":"
+)
+
+platforms <- c("facebook", "instagram", "twitter")
+results <- list()
+
+# Function to print the log-linear model summaries
+print_log_model_summary <- function(log_model_likes, log_model_comments, platform) {
+  print(paste("\nModel Summaries for", platform, "Platform"))
+  
+  # Summarize the log-transformed likes model
+  cat("Summary of Log-Linear Model for Likes:")
+  print(summary(log_model_likes))
+  
+  # Summarize the log-transformed comments model
+  cat("Summary of Log-Linear Model for Comments:")
+  print(summary(log_model_comments))
+}
+
+# Loop through platforms and collect results
+for (platform in platforms) {
+  
+  # Filter data for the specific platform
+  df_platform <- df5[df5$platform == platform, ]
+  df_platform[model_names] <- scale(df_platform[model_names])
+  
+  # Define the predictors based on the platform
+  if (platform == "facebook") {
+    predictors <- paste(c(model_names_facebook), collapse = " + ")
+  } else if (platform == "instagram") {
+    predictors <- paste(c(model_names_instagram), collapse = " + ")
+  } else if (platform == "twitter") {
+    predictors <- paste(c(model_names_twitter), collapse = " + ")
+  }
+  
+  # Create formulas for log-transformed likes and comments
+  formula_log_likes <- as.formula(paste("log(num_likes + 1) ~", predictors))
+  formula_log_comments <- as.formula(paste("log(num_comments + 1) ~", predictors))
+  
+  # Log-Linear Regression Models (OLS on log-transformed outcomes)
+  log_model_likes <- lm(formula_log_likes, data = df_platform)
+  log_model_comments <- lm(formula_log_comments, data = df_platform)
+  
+  # Print summaries of the log-transformed models for the current platform
+  print_log_model_summary(log_model_likes, log_model_comments, platform)
+}
+
+
+```
+
+```{r }
+
+image_names <- c("contrast", "color_intensity_brightness", "space", "colorfulness_saturation", "hue_characteristics", "horizontal_slanted", "visual_complexity_sharpness", "hue_variation_warm","color_variety_symmetry", "hue_consistency", "line_density", "purple", "cool", "face_direction", "green")
+
+df6 <- df5
+
+
+df6$log_num_likes <- log(df6$num_likes+1)
+df6$log_num_comments <- log(df6$num_comments+1)
+
+
+
+# Combine the image features, consistency variables, and interaction terms for the regression formula
+formula_likes <- as.formula(paste(
+  "log_num_likes ~", 
+  paste(c(image_names), collapse = " + ")
+))
+
+formula_comments <- as.formula(paste(
+  "log_num_comments ~", 
+  paste(c(image_names), collapse = " + ")
+))
+
+# Run the regression for log_num_likes
+model_likes <- lm(formula_likes, data = df6)
+
+# Run the regression for log_num_comments
+model_comments <- lm(formula_comments, data = df6)
+
+# View the results for log_num_likes
+summary(model_likes)
+
+# View the results for log_num_comments
+summary(model_comments)
+
+```
